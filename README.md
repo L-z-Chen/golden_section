@@ -21,9 +21,9 @@ To run the golden search script on all three algorithms, follow these steps:
 
 0. Modify the "auto_tune.py" file to include
 
-    a. include your optimizer class
+    a. Copy paste your optimizer class
     ```python
-    class SoftSign(Optimizer):
+    class <Your Optimizer Class>(Optimizer):
         def __init__(
         self,
         params,
@@ -42,6 +42,7 @@ To run the golden search script on all three algorithms, follow these steps:
         "weight_decay": [-3.2, -.7],#hyper parameters interval you want to tune
         "eps": [-12.3, -1.],#hyper parameters interval you want to tune
         "beta": 0.9,#fixed hyper parameters 
+        <other hyper parameters>
     }
     ```
 
