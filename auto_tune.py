@@ -164,6 +164,9 @@ def main():
         "eps": [-12.3, -1.],
         "beta": 0.9,
     }
+
+
+    
     intervals = [v for v in params_dict.values() if isinstance(v, list)]
     result = golden_search(wrapped_train_fn, intervals, n_calls=10000, random_seed=42)
     if dist.get_rank() == 0:
