@@ -52,7 +52,7 @@ To run the golden search script on all three algorithms, follow these steps:
     ```
 3. Run the golden search script:
     ```sh
-    ./run.sh
+    ./run.sh 
     ```
 
 ## Results

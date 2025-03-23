@@ -232,16 +232,16 @@ def init_distributed():
     return global_rank, local_rank, world_size
 
 class QwenTrainer:
-    def __init__(self, model_name, dataset_name):
+    def __init__(self, model_name, dataset_name, batch_size=24):
         self.rank, self.local_rank, self.world_size = init_distributed()
         self.device = torch.device(f"cuda:{self.local_rank}")
-        self.model, self.dataset = self.get_model_and_dataset(model_name, dataset_name)
+        self.model, self.dataset = self.get_model_and_dataset(dataset_name)
         self.train_sampler = DistributedSampler(self.dataset)
-        self.train_loader = DataLoader(self.dataset, batch_size=16, sampler=self.train_sampler)
+        self.train_loader = DataLoader(self.dataset, batch_size=batch_size, sampler=self.train_sampler)
         self.model.to(self.device)
         self.model = DDP(self.model, device_ids=[self.local_rank])
 
-    def get_model_and_dataset(self, model_name, dataset_name):
+    def get_model_and_dataset(self, dataset_name):
         name2path = {"openwebtext-100k": "Elriggs/openwebtext-100k"}
         raw_dataset = load_dataset(name2path[dataset_name], trust_remote_code=True)
         tokenizer = Qwen2Tokenizer.from_pretrained("Qwen/Qwen2.5-0.5B", trust_remote_code=True)
@@ -294,7 +294,6 @@ class QwenTrainer:
             )
 
 
-
         lr_scheduler = get_cosine_schedule_with_warmup(
             optimizer=optimizer,
             num_warmup_steps=100,
@@ -303,14 +302,22 @@ class QwenTrainer:
         )
         score = 0
         self.model.train()
+        print("Starting training...")
+        print("Gradient accumulation steps:", self.gradient_accumulation_steps)
         for epoch in range(1):
+            global_step = 0
             self.train_sampler.set_epoch(epoch)
             progress_bar = tqdm(enumerate(self.train_loader), total=len(self.train_loader), desc=f"Epoch {epoch+1}/1") if self.rank == 0 else enumerate(self.train_loader)
             for step, batch in progress_bar:
+                global_step += 1
                 batch = batch.to(self.device)
                 outputs = self.model(input_ids=batch, labels=batch)
-                loss = outputs.loss
+                loss = outputs.loss/self.gradient_accumulation_steps
                 loss.backward()
+
+                if global_step % self.gradient_accumulation_steps != 0: 
+                    continue
+            
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -318,7 +325,7 @@ class QwenTrainer:
                 if self.rank == 0:
                     progress_bar.set_postfix({"Loss": f"{loss.item():.4f}", "LR": f"{optimizer.param_groups[0]['lr']:.6f}"})
                     wandb.log({"loss": loss.item(), "lr": optimizer.param_groups[0]["lr"], "score": score}, step=step)
-                if np.isnan(loss.item()) or (step > 30 and score > 6.2):
+                if np.isnan(loss.item()) or (step > 300 and score > 6.1):
                     if self.rank == 0:
                         wandb.finish()
                     return 1e10 if np.isnan(loss.item()) else score
@@ -352,7 +359,7 @@ def create_optimizer_from_dict(optimizer_class, model_params, params_dict, x):
 
     for i, k in enumerate(keys):
         if i < len(x):
-            if k in ["lr", "weight_decay", "eps"]:
+            if k in ["lr", "weight_decay", "eps", "wd"]:
               filled[k] = 10 ** x[i]
             else:
               filled[k] = x[i]
@@ -383,31 +390,30 @@ def extract_optimizer_info_from_file(file_path: str):
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
-            if any(isinstance(base, ast.Name) and base.id == 'Optimizer' for base in node.bases):
-                optimizer_name = node.name
+            optimizer_name = node.name
 
-                for item in node.body:
-                    if isinstance(item, ast.FunctionDef) and item.name == "__init__":
-                        args = item.args
-                        param_names = [arg.arg for arg in args.args[2:]]
-                        defaults = args.defaults
-                        start = len(param_names) - len(defaults)
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                    args = item.args
+                    param_names = [arg.arg for arg in args.args[2:]]
+                    defaults = args.defaults
+                    start = len(param_names) - len(defaults)
 
-                        for i, default in enumerate(defaults):
-                            param_name = param_names[start + i]
-                            try:
-                                value = ast.literal_eval(default)
-                            except Exception:
-                                value = ast.unparse(default) if hasattr(ast, 'unparse') else str(default)
-                            hyperparams[param_name] = value
-                break
+                    for i, default in enumerate(defaults):
+                        param_name = param_names[start + i]
+                        try:
+                            value = ast.literal_eval(default)
+                        except Exception:
+                            value = ast.unparse(default) if hasattr(ast, 'unparse') else str(default)
+                        hyperparams[param_name] = value
+                # break
 
     # Dynamically import the module and get the class
     module_name = os.path.splitext(os.path.basename(file_path))[0]
     spec = importlib.util.spec_from_file_location(module_name, file_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-
+    print("optimizer name:", optimizer_name)
     optimizer_class = getattr(mod, optimizer_name)
 
     return {

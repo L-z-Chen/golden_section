@@ -1,3 +1,4 @@
 wandb
 *.bin
 wandb/
+wandb.txt
