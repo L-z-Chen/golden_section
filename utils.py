@@ -323,7 +323,7 @@ class QwenTrainer:
                 optimizer.zero_grad()
                 score = score * 0.9 + loss.item() * 0.1
                 if self.rank == 0:
-                    progress_bar.set_postfix({"Loss": f"{loss.item():.4f}", "LR": f"{optimizer.param_groups[0]['lr']:.6f}"})
+                    progress_bar.set_postfix({"Loss": f"{(self.gradient_accumulation_steps * loss).item():.4f}", "LR": f"{optimizer.param_groups[0]['lr']:.6f}"})
                     wandb.log({"loss": loss.item(), "lr": optimizer.param_groups[0]["lr"], "score": score}, step=step)
                 if np.isnan(loss.item()) or (step > 300 and score > 6.1):
                     if self.rank == 0:
