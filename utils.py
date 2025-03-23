@@ -181,17 +181,6 @@ def get_model_and_dataset(model_name, dataset_name, hidden_size):
     model = Qwen2ForCausalLM(config)
     return model, train_dataset
 
-def init_distributed():
-    assert "LOCAL_RANK" in os.environ, "torchrun should set LOCAL_RANK"
-    global_rank = int(os.environ["RANK"])
-    local_rank = int(os.environ["LOCAL_RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group(backend="nccl")
-    print(f"[Rank {global_rank}] Local Rank: {local_rank}, World Size: {world_size}, Using GPU: {torch.cuda.current_device()} - {torch.cuda.get_device_name(torch.cuda.current_device())}")
-    return global_rank, local_rank, world_size
-
-
 
 
 class MoonDataset(Dataset):
@@ -224,8 +213,10 @@ class MoonDataset(Dataset):
         token_slice = self.tokens[start_idx:end_idx]
         data = torch.tensor(token_slice, dtype=torch.long)
         return data
-    
+
+distributed_initialized = False
 def init_distributed():
+
     global distributed_initialized
     if distributed_initialized:
         return int(os.environ["RANK"]), int(os.environ["LOCAL_RANK"]), int(os.environ["WORLD_SIZE"])
@@ -290,9 +281,10 @@ class QwenTrainer:
             params_dict=params_dict,
             x = x,
         )
-        print(f"Using optimizer: {optimizer_class.__name__} with args: {optimizer_args}")
         # Log to wandb
         if self.rank == 0:
+            print(f"Using optimizer: {optimizer_class.__name__} with args: {optimizer_args}")
+
             n_total_params = sum(p.numel() for _, p in self.model.named_parameters())
             run_name = f"{optimizer_class.__name__}_" + "_".join([f"{k}={v:.1e}" if isinstance(v, float) else f"{k}={v}" for k, v in optimizer_args.items()])
             wandb.init(
@@ -334,3 +326,92 @@ class QwenTrainer:
             wandb.finish()
             print(f"Finished with score {score}")
         return score
+
+# ====================================
+# Utility: Create Optimizer from dict
+# ====================================
+import inspect
+def create_optimizer_from_dict(optimizer_class, model_params, params_dict, x):
+    """
+    Constructs an optimizer from a dictionary of hyperparameters.
+
+    Args:
+        optimizer_class: The optimizer class
+        model_params: model.parameters()
+        params_dict: dict of all hyperparameters (e.g., {"lr": 1e-3, "weight_decay": 1e-4, ...})
+
+    Returns:
+        optimizer: instantiated optimizer
+        valid_args: used optimizer args (excluding 'params')
+    """
+    # Validate args
+    sig = inspect.signature(optimizer_class).parameters
+    valid_args = {k: v for k, v in params_dict.items() if k in sig}
+    keys = list(valid_args.keys())
+    filled = {}
+
+    for i, k in enumerate(keys):
+        if i < len(x):
+            if k in ["lr", "weight_decay", "eps"]:
+              filled[k] = 10 ** x[i]
+            else:
+              filled[k] = x[i]
+        else:
+            filled[k] = valid_args[k]
+    valid_args = filled
+    unknown_args = [k for k in params_dict if k not in sig and k != "params"]
+    if unknown_args:
+        raise ValueError(f"Unknown hyperparameter(s) for {optimizer_class.__name__}: {unknown_args}")
+
+    # Create optimizer
+    optimizer = optimizer_class(model_params, **valid_args)
+    return optimizer, valid_args
+
+
+
+import ast
+import os
+import importlib.util
+def extract_optimizer_info_from_file(file_path: str):
+    # Load source code and parse AST
+    with open(file_path, "r", encoding="utf-8") as f:
+        code = f.read()
+    tree = ast.parse(code)
+
+    optimizer_name = None
+    hyperparams = {}
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            if any(isinstance(base, ast.Name) and base.id == 'Optimizer' for base in node.bases):
+                optimizer_name = node.name
+
+                for item in node.body:
+                    if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                        args = item.args
+                        param_names = [arg.arg for arg in args.args[2:]]
+                        defaults = args.defaults
+                        start = len(param_names) - len(defaults)
+
+                        for i, default in enumerate(defaults):
+                            param_name = param_names[start + i]
+                            try:
+                                value = ast.literal_eval(default)
+                            except Exception:
+                                value = ast.unparse(default) if hasattr(ast, 'unparse') else str(default)
+                            hyperparams[param_name] = value
+                break
+
+    # Dynamically import the module and get the class
+    module_name = os.path.splitext(os.path.basename(file_path))[0]
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    optimizer_class = getattr(mod, optimizer_name)
+
+    return {
+        "optimizer_name": optimizer_name,
+        "optimizer_class": optimizer_class,
+        "hyperparameters": hyperparams
+    }

@@ -21,7 +21,7 @@ To run the golden search script on all three algorithms, follow these steps:
 
 0. Modify the "auto_tune.py" file to include
 
-    a. Copy paste your optimizer class
+    a. Copy paste your optimizer class to "opt.py"
     ```python
     class <Your Optimizer Class>(Optimizer):
         def __init__(
@@ -29,23 +29,19 @@ To run the golden search script on all three algorithms, follow these steps:
         params,
         ...
     ```
-    b. Configure the optimizer's hyperparameters
+    b. For your Optimizer, if you want to tune a parameter, for example, learning rate, beta, weight decay, eps:
     ```python
-    def wrapped_train_fn(x):
-        return trainer.train_on(
-            params_dict,
-            <Your Optimizer Class>,
-            x
-        )
-    params_dict = {
-        "lr": [-5., -2.], #hyper parameters interval you want to tune
-        "weight_decay": [-3.2, -.7],#hyper parameters interval you want to tune
-        "eps": [-12.3, -1.],#hyper parameters interval you want to tune
-        "beta": 0.9,#fixed hyper parameters 
-        <other hyper parameters>
-    }
+    class <Your Optimizer Class>(Optimizer):
+        def __init__(
+            self,
+            params,
+            lr: list = [-5., -2.], # log scale tuning interval
+            beta: list = [0.6, 0.99], 
+            eps: list = [-12.3, -1.], # log scale
+            weight_decay: list = [-3., -.7], # log scale
+            correct_bias: bool = True,
+  ):
     ```
-
 1. Clone the repository:
     ```sh
     git clone https://github.com/L-z-Chen/golden_section
