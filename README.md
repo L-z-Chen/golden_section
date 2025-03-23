@@ -40,7 +40,7 @@ To run the golden search script on all three algorithms, follow these steps:
             eps: list = [-12.3, -1.], # log scale
             weight_decay: list = [-3., -.7], # log scale
             correct_bias: bool = True,
-  ):
+    ):
     ```
 1. Clone the repository:
     ```sh
