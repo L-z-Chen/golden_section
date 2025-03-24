@@ -328,7 +328,7 @@ class QwenTrainer:
                 if self.rank == 0:
                     progress_bar.set_postfix({"Loss": f"{(self.gradient_accumulation_steps * loss).item():.4f}", "LR": f"{optimizer.param_groups[0]['lr']:.6f}"})
                     wandb.log({"loss": loss.item(), "lr": optimizer.param_groups[0]["lr"], "score": score}, step=update_step)
-                if np.isnan(loss.item()) or (update_step > 30 and score > 6.1):
+                if np.isnan(loss.item()) or (update_step > 300 and score > 6.1):
                     if self.rank == 0:
                         wandb.finish()
                     return 1e10 if np.isnan(loss.item()) else score
