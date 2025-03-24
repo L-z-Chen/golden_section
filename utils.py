@@ -232,20 +232,14 @@ def init_distributed():
     return global_rank, local_rank, world_size
 
 class QwenTrainer:
-    def __init__(self, model_name, dataset_name, batch_size=24):
+    def __init__(self, dataset_name, batch_size=24):
+        self.dataset_name = dataset_name
         self.rank, self.local_rank, self.world_size = init_distributed()
         self.device = torch.device(f"cuda:{self.local_rank}")
-        self.model, self.dataset = self.get_model_and_dataset(dataset_name)
+        self.dataset = self.get_dataset(dataset_name)
         self.train_sampler = DistributedSampler(self.dataset)
         self.train_loader = DataLoader(self.dataset, batch_size=batch_size, sampler=self.train_sampler)
-        self.model.to(self.device)
-        self.model = DDP(self.model, device_ids=[self.local_rank])
-
-    def get_model_and_dataset(self, dataset_name):
-        name2path = {"openwebtext-100k": "Elriggs/openwebtext-100k"}
-        raw_dataset = load_dataset(name2path[dataset_name], trust_remote_code=True)
-        tokenizer = Qwen2Tokenizer.from_pretrained("Qwen/Qwen2.5-0.5B", trust_remote_code=True)
-        dataset = MoonDataset(dataset_name, raw_dataset, tokenizer)
+    def get_model(self):
         config = Qwen2Config(
             attention_dropout=0.0,
             bos_token_id=151643,
@@ -271,10 +265,20 @@ class QwenTrainer:
             vocab_size=151936,
         )
         model = Qwen2ForCausalLM(config)
-        return model, dataset
+        return model
+    def get_dataset(self, dataset_name):
+        name2path = {"openwebtext-100k": "Elriggs/openwebtext-100k"}
+        raw_dataset = load_dataset(name2path[dataset_name], trust_remote_code=True)
+        tokenizer = Qwen2Tokenizer.from_pretrained("Qwen/Qwen2.5-0.5B", trust_remote_code=True)
+        dataset = MoonDataset(dataset_name, raw_dataset, tokenizer)
+        return dataset
 
 
     def train_on(self, params_dict, optimizer_class, x):
+        model = self.get_model()
+        model.to(self.device)
+        model = DDP(model, device_ids=[self.local_rank])
+        self.model = model  # replace the old model
         optimizer, optimizer_args = create_optimizer_from_dict(
             optimizer_class=optimizer_class,
             model_params=self.model.parameters(),
@@ -305,27 +309,26 @@ class QwenTrainer:
         print("Starting training...")
         print("Gradient accumulation steps:", self.gradient_accumulation_steps)
         for epoch in range(1):
-            global_step = 0
+            update_step = 0
             self.train_sampler.set_epoch(epoch)
             progress_bar = tqdm(enumerate(self.train_loader), total=len(self.train_loader), desc=f"Epoch {epoch+1}/1") if self.rank == 0 else enumerate(self.train_loader)
             for step, batch in progress_bar:
-                global_step += 1
                 batch = batch.to(self.device)
                 outputs = self.model(input_ids=batch, labels=batch)
                 loss = outputs.loss/self.gradient_accumulation_steps
                 loss.backward()
 
-                if global_step % self.gradient_accumulation_steps != 0: 
+                if step % self.gradient_accumulation_steps != 0: 
                     continue
-            
+                update_step += 1
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
-                score = score * 0.9 + loss.item() * 0.1
+                score = score * 0.9 + (self.gradient_accumulation_steps * loss).item() * 0.1
                 if self.rank == 0:
                     progress_bar.set_postfix({"Loss": f"{(self.gradient_accumulation_steps * loss).item():.4f}", "LR": f"{optimizer.param_groups[0]['lr']:.6f}"})
-                    wandb.log({"loss": loss.item(), "lr": optimizer.param_groups[0]["lr"], "score": score}, step=step)
-                if np.isnan(loss.item()) or (step > 300 and score > 6.1):
+                    wandb.log({"loss": loss.item(), "lr": optimizer.param_groups[0]["lr"], "score": score}, step=update_step)
+                if np.isnan(loss.item()) or (update_step > 30 and score > 6.1):
                     if self.rank == 0:
                         wandb.finish()
                     return 1e10 if np.isnan(loss.item()) else score

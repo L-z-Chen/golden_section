@@ -12,7 +12,7 @@ def main():
     args = parse_args()
     file_path = "opt.py"
     info = extract_optimizer_info_from_file(file_path)
-    trainer = QwenTrainer(model_name="qwen", dataset_name="openwebtext-100k", batch_size=args.local_batch_size)
+    trainer = QwenTrainer(dataset_name="openwebtext-100k", batch_size=args.local_batch_size)
     # gradient accumulation
     if args.global_batch_size % args.local_batch_size != 0:
         raise ValueError("Global batch size must be divisible by local batch size.")
