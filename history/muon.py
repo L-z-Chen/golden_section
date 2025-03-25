@@ -30,7 +30,7 @@ class Muon(torch.optim.Optimizer):
         ns_steps=5,
         adamw_betas=(0.95, 0.95),
         adamw_eps=1e-8,
-        embed_dim_threshold=1000,
+        embed_dim_threshold=2000,
     ):
         defaults = dict(
             lr=lr,

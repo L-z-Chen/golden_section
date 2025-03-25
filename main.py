@@ -16,7 +16,7 @@ def main():
     # gradient accumulation
     if args.global_batch_size % args.local_batch_size != 0:
         raise ValueError("Global batch size must be divisible by local batch size.")
-    trainer.gradient_accumulation_steps = args.global_batch_size // args.local_batch_size
+    trainer.gradient_accumulation_steps = args.global_batch_size // (args.local_batch_size * dist.get_world_size())
     def wrapped_train_fn(x):
         return trainer.train_on(
             params_dict,
